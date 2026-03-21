@@ -1,0 +1,24 @@
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+.eggs/
+*.egg
+.venv/
+venv/
+env/
+
+# Runtime data (keys, state, receipts) — never commit
+data/
+*.pid
+*.key
+*.pem
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
