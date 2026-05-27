@@ -11,33 +11,50 @@ fsm:
       description: "No active workflow"
       allowed_tools: [".*"]
 
-    planning:
-      description: "Read-only exploration"
+    thinking:
+      description: "Agent is thinking through the task"
       allowed_tools: ["read", "bash", "multi_tool_use\\.parallel"]
 
-    developing:
-      description: "Full tool access"
+    planning:
+      description: "Read-only planning and exploration"
+      allowed_tools: ["read", "bash", "multi_tool_use\\.parallel"]
+
+    reading:
+      description: "Inspecting files or project state"
+      allowed_tools: ["read", "bash", "multi_tool_use\\.parallel"]
+
+    writing:
+      description: "Editing files or making local changes"
       allowed_tools: [".*"]
 
     testing:
-      description: "Test execution only"
+      description: "Running tests or test-like checks"
       allowed_tools: ["read", "bash", "multi_tool_use\\.parallel"]
+
+    committing:
+      description: "Creating commits"
+      allowed_tools: ["read", "bash", "multi_tool_use\\.parallel"]
+
+    pushing:
+      description: "Pushing commits to a remote"
+      allowed_tools: ["read", "bash", "multi_tool_use\\.parallel"]
+
+    developing:
+      description: "General full-access development"
+      allowed_tools: [".*"]
 
     reviewing:
       description: "Read-only review"
       allowed_tools: ["read", "bash", "multi_tool_use\\.parallel"]
 
   transitions:
-    - { from: idle, to: planning, trigger: manual }
-    - { from: idle, to: developing, trigger: manual }
-    - { from: planning, to: developing, trigger: manual }
-    - from: developing
-      to: testing
-      trigger: bash
-      guards:
-        - field: command
-          pattern: "^(pnpm|npm)\\s+test"
-    - { from: testing, to: developing, trigger: manual }
-    - { from: developing, to: reviewing, trigger: manual }
-    - { from: reviewing, to: developing, trigger: manual }
+    - { from: "*", to: thinking, trigger: manual }
+    - { from: "*", to: planning, trigger: manual }
+    - { from: "*", to: reading, trigger: manual }
+    - { from: "*", to: writing, trigger: manual }
+    - { from: "*", to: testing, trigger: manual }
+    - { from: "*", to: committing, trigger: manual }
+    - { from: "*", to: pushing, trigger: manual }
+    - { from: "*", to: developing, trigger: manual }
+    - { from: "*", to: reviewing, trigger: manual }
     - { from: "*", to: idle, trigger: manual }
