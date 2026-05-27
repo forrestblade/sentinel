@@ -1,5 +1,6 @@
 """aiohttp HTTP server for sentinel gating and receipt generation."""
 
+import hashlib
 import json
 import os
 import signal
@@ -29,8 +30,13 @@ def create_app(config: SentinelConfig) -> web.Application:
     public_key = load_public_key(key_dir / "sentinel.pub")
 
     app["fsm"] = SentinelFSM(config.fsm, data_dir / "state.json")
+    app["private_key"] = private_key
+    app["public_key"] = public_key
+    app["current_session"] = None
     app["chain"] = ReceiptChain(data_dir / "receipts.jsonl", private_key, public_key)
 
+    app.router.add_post("/session", handle_session)
+    app.router.add_post("/session/end", handle_session_end)
     app.router.add_post("/gate", handle_gate)
     app.router.add_post("/receipt", handle_receipt)
     app.router.add_post("/transition", handle_transition)
@@ -38,6 +44,93 @@ def create_app(config: SentinelConfig) -> web.Application:
     app.router.add_get("/health", handle_health)
 
     return app
+
+
+def _session_slug(session_key: str) -> str:
+    digest = hashlib.sha256(session_key.encode("utf-8")).hexdigest()[:16]
+    name = Path(session_key).stem or "session"
+    safe_name = "".join(c if c.isalnum() or c in "._-" else "_" for c in name)[:48]
+    return f"{safe_name}-{digest}"
+
+
+def _switch_receipt_session(app: web.Application, session_key: str, metadata: dict) -> dict:
+    data_dir: Path = app["config"].server.data_dir
+    slug = _session_slug(session_key)
+    session_dir = data_dir / "sessions" / slug
+    session_dir.mkdir(parents=True, exist_ok=True)
+
+    chain_path = session_dir / "receipts.jsonl"
+    app["chain"] = ReceiptChain(chain_path, app["private_key"], app["public_key"])
+    app["current_session"] = {
+        "id": slug,
+        "key": session_key,
+        "path": str(chain_path),
+        "started_at": time.time(),
+        "metadata": metadata,
+    }
+
+    session_json = json.dumps(app["current_session"], separators=(",", ":"))
+    index_path = data_dir / "sessions.jsonl"
+    with open(index_path, "a") as f:
+        f.write(session_json + "\n")
+    (data_dir / "current_session.json").write_text(session_json)
+
+    return app["current_session"]
+
+
+async def handle_session(request: web.Request) -> web.Response:
+    """Start or resume a receipt log for an agent session."""
+    try:
+        body = await request.json()
+    except json.JSONDecodeError:
+        return web.json_response({"error": "Invalid JSON"}, status=400)
+
+    session_key = body.get("session_id") or body.get("session_file")
+    if not session_key:
+        return web.json_response({"error": "Missing 'session_id' or 'session_file'"}, status=400)
+
+    session = _switch_receipt_session(request.app, str(session_key), body)
+    chain: ReceiptChain = request.app["chain"]
+    return web.json_response({
+        "session": session,
+        "chain_length": chain.length,
+    })
+
+
+async def handle_session_end(request: web.Request) -> web.Response:
+    """End the active receipt log for an agent session."""
+    try:
+        body = await request.json()
+    except json.JSONDecodeError:
+        return web.json_response({"error": "Invalid JSON"}, status=400)
+
+    current = request.app.get("current_session")
+    if current is None:
+        return web.json_response({"ended": False, "reason": "No active session"})
+
+    session_key = body.get("session_id") or body.get("session_file")
+    if session_key and str(session_key) != current.get("key"):
+        return web.json_response({"ended": False, "reason": "Session mismatch"}, status=409)
+
+    ended = {
+        **current,
+        "ended_at": time.time(),
+        "end_metadata": body,
+    }
+    data_dir: Path = request.app["config"].server.data_dir
+    session_json = json.dumps(ended, separators=(",", ":"))
+    with open(data_dir / "sessions.jsonl", "a") as f:
+        f.write(session_json + "\n")
+    (data_dir / "current_session.json").write_text(session_json)
+
+    request.app["current_session"] = None
+    request.app["chain"] = ReceiptChain(
+        data_dir / "receipts.jsonl",
+        request.app["private_key"],
+        request.app["public_key"],
+    )
+
+    return web.json_response({"ended": True, "session": ended})
 
 
 async def handle_gate(request: web.Request) -> web.Response:
@@ -164,6 +257,7 @@ async def handle_health(request: web.Request) -> web.Response:
         "status": "ok",
         "uptime": time.time() - request.app["start_time"],
         "chain_length": chain.length,
+        "session": request.app.get("current_session"),
     })
 
 

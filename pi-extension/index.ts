@@ -62,14 +62,62 @@ function formatToolList(tools: string[] = [], max = 6) {
   return `${tools.slice(0, max).join(", ")} +${tools.length - max} more`;
 }
 
+function looksLikePlanningRequest(text: string) {
+  const normalized = text.toLowerCase();
+  return (
+    /\b(plan|planning|design|approach|outline|review|inspect|investigate|analy[sz]e|think through|look into)\b/.test(normalized) ||
+    /\b(no code|read[- ]only|don'?t (edit|change|write|modify)|without (editing|changing|writing|modifying))\b/.test(normalized)
+  );
+}
+
+function isTestCommand(command: string) {
+  return /\b(npm|pnpm|yarn|bun)\s+(run\s+)?test\b|\b(pytest|cargo\s+test|go\s+test|dotnet\s+test|mvn\s+test|gradle\s+test)\b/.test(command);
+}
+
+function isReadOnlyBash(command: string) {
+  return /^\s*(ls|dir|pwd|echo|cat|type|find|rg|grep|git\s+(status|diff|log|show|branch)|npm\s+ls|pnpm\s+ls)\b/.test(command);
+}
+
 export default function (pi: ExtensionAPI) {
   let warnedDown = false;
   let started = false;
-  let widgetVisible = true;
+  // Keep the status-line indicator on by default. The larger widget is opt-in
+  // so the same Sentinel state is not rendered twice in the normal TUI.
+  let widgetVisible = false;
   let verboseWidget = false;
   let lastDecision = "startup";
   let lastTool = "none";
+  let nextAgentState: "planning" | "developing" = "developing";
   let refreshTimer: ReturnType<typeof setInterval> | undefined;
+
+  function sessionPayload(ctx: ExtensionContext, reason: string) {
+    const sessionFile = ctx.sessionManager.getSessionFile();
+    return {
+      source: "pi",
+      reason,
+      session_file: sessionFile,
+      session_id: sessionFile ?? `${ctx.cwd}:ephemeral`,
+      cwd: ctx.cwd,
+    };
+  }
+
+  async function registerSession(ctx: ExtensionContext, reason: string) {
+    await post("/session", sessionPayload(ctx, reason), ctx.signal);
+  }
+
+  async function endSession(ctx: ExtensionContext, reason: string) {
+    await post("/session/end", sessionPayload(ctx, reason), ctx.signal);
+  }
+
+  async function transition(ctx: ExtensionContext, toState: string, reason: string) {
+    try {
+      const state = await get("/state", ctx.signal);
+      if (state.current === toState) return;
+      await post("/transition", { to_state: toState, reason }, ctx.signal);
+    } catch {
+      // Sentinel automation is fail-open; never break pi because the sidecar is down or lacks a state.
+    }
+  }
 
   async function refreshUi(ctx: ExtensionContext, notify = false) {
     try {
@@ -102,7 +150,7 @@ export default function (pi: ExtensionAPI) {
     }
   }
 
-  pi.on("session_start", async (_event, ctx) => {
+  pi.on("session_start", async (event, ctx) => {
     if (!(await healthy())) {
       started = startSentinel();
       if (started) await new Promise((resolve) => setTimeout(resolve, 800));
@@ -110,24 +158,74 @@ export default function (pi: ExtensionAPI) {
 
     if (await healthy()) {
       warnedDown = false;
+      try {
+        await registerSession(ctx, event.reason);
+      } catch (error) {
+        ctx.ui.notify(`Sentinel session log failed: ${String(error)}`, "warning");
+      }
     } else {
       ctx.ui.notify("Sentinel off; fail-open.", "warning");
       warnedDown = true;
     }
 
     await refreshUi(ctx);
+    if (refreshTimer) clearInterval(refreshTimer);
     refreshTimer = setInterval(() => void refreshUi(ctx), 10_000);
   });
 
-  pi.on("session_shutdown", async (_event, ctx) => {
+  pi.on("session_shutdown", async (event, ctx) => {
     if (refreshTimer) clearInterval(refreshTimer);
     refreshTimer = undefined;
+    nextAgentState = "developing";
+    if (["quit", "new", "resume", "fork"].includes(event.reason)) {
+      try {
+        await endSession(ctx, event.reason);
+      } catch {
+        // Best-effort: session shutdown should not block pi teardown/switching.
+      }
+    }
     ctx.ui.setWidget("sentinel", undefined);
     ctx.ui.setStatus("sentinel", undefined);
   });
 
+  pi.on("input", async (event) => {
+    nextAgentState = looksLikePlanningRequest(event.text) ? "planning" : "developing";
+    return { action: "continue" };
+  });
+
+  pi.on("before_agent_start", async (event) => {
+    // Re-check after input transforms/templates/skills so expanded planning prompts count too.
+    nextAgentState = looksLikePlanningRequest(event.prompt) ? "planning" : nextAgentState;
+  });
+
+  pi.on("agent_start", async (_event, ctx) => {
+    await transition(ctx, nextAgentState, `pi agent started (${nextAgentState})`);
+    await refreshUi(ctx);
+  });
+
+  pi.on("agent_end", async (_event, ctx) => {
+    nextAgentState = "developing";
+    await transition(ctx, "idle", "pi agent ended");
+    await refreshUi(ctx);
+  });
+
   pi.on("tool_call", async (event, ctx) => {
     lastTool = event.toolName;
+
+    if (event.toolName === "bash" && typeof event.input?.command === "string") {
+      const command = event.input.command;
+      if (isTestCommand(command)) {
+        await transition(ctx, "testing", "pi running tests");
+        await refreshUi(ctx);
+      } else if (!isReadOnlyBash(command)) {
+        await transition(ctx, "developing", "pi bash command may change state");
+        await refreshUi(ctx);
+      }
+    } else if (["edit", "write"].includes(event.toolName)) {
+      await transition(ctx, "developing", `pi ${event.toolName} tool called`);
+      await refreshUi(ctx);
+    }
+
     try {
       const result = await post("/gate", {
         source: "pi",

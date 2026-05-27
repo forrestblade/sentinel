@@ -1,6 +1,6 @@
 # Sentinel
 
-State-based tool gating and cryptographic receipt system for Claude Code and [pi](https://github.com/earendil-works/pi-coding-agent).
+State-based tool gating and cryptographic receipt system for Claude Code and [pi](https://pi.dev/).
 
 Sentinel keeps tool policy enforcement outside the model's prompt/context. It gates every tool call with deterministic Python code, then records tamper-evident receipts for the calls that run.
 
@@ -28,8 +28,10 @@ If allowed, the tool runs
     ↓
 Post-tool hook / extension event → POST http://127.0.0.1:9800/receipt
     ↓
-Sentinel hashes input/output, links to previous receipt, signs, appends JSONL
+Sentinel hashes input/output, links to previous receipt, signs, appends session JSONL
 ```
+
+When pi starts, creates, forks, or resumes a session, the extension calls `/session`; Sentinel switches to a dedicated log under `data/sessions/`, so receipt sequence numbers start at `0` for a new session. Resuming the same pi session reopens the same log. When pi closes or switches away from a session, the extension calls `/session/end` to mark that receipt session ended.
 
 Example receipt:
 
@@ -162,8 +164,9 @@ Sentinel can also run as a pi extension. The extension:
 
 - gates every pi tool call through `/gate`
 - records every pi tool result through `/receipt`
+- starts/resumes a separate receipt log for each pi session through `/session`
 - auto-starts Sentinel on session start when possible
-- shows a live status widget and status-line entry
+- shows a live status-line entry, with an optional widget
 - adds commands for state, transitions, and widget controls
 
 Install:
@@ -178,7 +181,7 @@ Commands:
 
 - `/sentinel-state` — show server, FSM, allowed tools, transitions, and receipt count
 - `/sentinel-transition <state>` — manually transition FSM state
-- `/sentinel-ui <on|off|toggle|verbose|compact|refresh>` — control the live widget
+- `/sentinel-ui <on|off|toggle|verbose|compact|refresh>` — control the optional live widget
 
 Optional environment variables:
 
@@ -225,8 +228,10 @@ When registered as an MCP server, Claude can query its own enforcement state:
 
 ## HTTP API
 
-- `GET /health` — server health, uptime, current state, receipt count
+- `GET /health` — server health, uptime, active session, receipt count
 - `GET /state` — current FSM state, allowed tools, available transitions
+- `POST /session` — start/resume a per-session receipt log; accepts `session_id` or `session_file`
+- `POST /session/end` — end the active per-session receipt log
 - `POST /gate` — gate a tool call
 - `POST /receipt` — append a signed receipt for a tool result
 - `POST /transition` — manually transition state

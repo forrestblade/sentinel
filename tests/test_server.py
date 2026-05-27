@@ -38,6 +38,73 @@ async def test_health(aiohttp_client, sentinel_app):
     data = await resp.json()
     assert data["status"] == "ok"
     assert data["chain_length"] == 0
+    assert data["session"] is None
+
+
+async def test_session_starts_separate_receipt_log(aiohttp_client, sentinel_app):
+    client = await aiohttp_client(sentinel_app)
+
+    resp = await client.post("/session", json={"session_file": "/tmp/one.jsonl"})
+    assert resp.status == 200
+    first = await resp.json()
+    assert first["chain_length"] == 0
+
+    await client.post("/gate", json={
+        "tool_name": "Read",
+        "tool_input": {"file_path": "/test.py"},
+    })
+    assert (await (await client.get("/health")).json())["chain_length"] == 1
+
+    resp = await client.post("/session", json={"session_file": "/tmp/two.jsonl"})
+    assert resp.status == 200
+    second = await resp.json()
+    assert second["chain_length"] == 0
+    assert second["session"]["id"] != first["session"]["id"]
+    assert (await (await client.get("/health")).json())["chain_length"] == 0
+
+
+async def test_session_resume_existing_receipt_log(aiohttp_client, sentinel_app):
+    client = await aiohttp_client(sentinel_app)
+
+    await client.post("/session", json={"session_file": "/tmp/one.jsonl"})
+    await client.post("/gate", json={
+        "tool_name": "Read",
+        "tool_input": {"file_path": "/test.py"},
+    })
+
+    resp = await client.post("/session", json={"session_file": "/tmp/one.jsonl"})
+    assert resp.status == 200
+    data = await resp.json()
+    assert data["chain_length"] == 1
+
+
+async def test_session_end_clears_active_session(aiohttp_client, sentinel_app):
+    client = await aiohttp_client(sentinel_app)
+
+    await client.post("/session", json={"session_file": "/tmp/one.jsonl"})
+    resp = await client.post("/session/end", json={"session_file": "/tmp/one.jsonl", "reason": "quit"})
+    assert resp.status == 200
+    data = await resp.json()
+    assert data["ended"] is True
+    assert data["session"]["ended_at"] >= data["session"]["started_at"]
+
+    health = await (await client.get("/health")).json()
+    assert health["session"] is None
+    assert health["chain_length"] == 0
+
+
+async def test_session_end_mismatch(aiohttp_client, sentinel_app):
+    client = await aiohttp_client(sentinel_app)
+
+    await client.post("/session", json={"session_file": "/tmp/one.jsonl"})
+    resp = await client.post("/session/end", json={"session_file": "/tmp/two.jsonl"})
+    assert resp.status == 409
+
+
+async def test_session_missing_key(aiohttp_client, sentinel_app):
+    client = await aiohttp_client(sentinel_app)
+    resp = await client.post("/session", json={})
+    assert resp.status == 400
 
 
 async def test_state(aiohttp_client, sentinel_app):
