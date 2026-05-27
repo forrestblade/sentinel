@@ -66,7 +66,7 @@ export default function (pi: ExtensionAPI) {
   let warnedDown = false;
   let started = false;
   let widgetVisible = true;
-  let verboseWidget = true;
+  let verboseWidget = false;
   let lastDecision = "startup";
   let lastTool = "none";
   let refreshTimer: ReturnType<typeof setInterval> | undefined;
@@ -76,23 +76,17 @@ export default function (pi: ExtensionAPI) {
       const [health, state] = await Promise.all([get("/health", ctx.signal), get("/state", ctx.signal)]);
       warnedDown = false;
       const chain = health.chain_length ?? "?";
-      ctx.ui.setStatus("sentinel", `sentinel: ${state.current} · ${chain} receipts`);
+      ctx.ui.setStatus("sentinel", `🛡 ${state.current} · ${chain}r`);
 
       if (widgetVisible) {
-        const transitions = formatTransitions(state.available_transitions);
         const lines = verboseWidget
           ? [
-              `🛡 Sentinel ${health.status} @ ${SENTINEL_URL}`,
-              `state: ${state.current} (${state.description})`,
-              `chain: ${chain} receipts · uptime: ${Math.floor((health.uptime ?? 0) / 60)}m · last: ${lastDecision} ${lastTool}`,
-              `allowed: ${formatToolList(state.allowed_tools, 8)}`,
-              `transitions: ${transitions}`,
-              `commands: /sentinel-state · /sentinel-transition <state> · /sentinel-ui <on|off|toggle|verbose|compact|refresh>`,
+              `🛡 ${state.current} · ${chain}r · ${Math.floor((health.uptime ?? 0) / 60)}m`,
+              `last ${lastDecision}:${lastTool}`,
+              `allow ${formatToolList(state.allowed_tools, 6)}`,
+              `next ${formatTransitions(state.available_transitions)}`,
             ]
-          : [
-              `🛡 Sentinel: ${state.current} · ${chain} receipts · last: ${lastDecision} ${lastTool}`,
-              `allowed: ${formatToolList(state.allowed_tools, 5)}`,
-            ];
+          : [`🛡 ${state.current} · ${chain}r · ${lastDecision}:${lastTool}`];
         ctx.ui.setWidget("sentinel", lines, { placement: "belowEditor" });
       } else {
         ctx.ui.setWidget("sentinel", undefined);
@@ -100,14 +94,9 @@ export default function (pi: ExtensionAPI) {
 
       if (notify) ctx.ui.notify(`Sentinel: ${state.current}, ${chain} receipts`, "info");
     } catch (error) {
-      ctx.ui.setStatus("sentinel", "sentinel: off");
+      ctx.ui.setStatus("sentinel", "🛡 off");
       if (widgetVisible) {
-        ctx.ui.setWidget("sentinel", [
-          `🛡 Sentinel: offline (${SENTINEL_URL})`,
-          "Tool gates are fail-open until the server is reachable.",
-          `Command: ${SENTINEL_COMMAND}`,
-          `Config: ${SENTINEL_CONFIG ?? "default"}`,
-        ], { placement: "belowEditor" });
+        ctx.ui.setWidget("sentinel", [`🛡 off · fail-open · ${SENTINEL_URL}`], { placement: "belowEditor" });
       }
       if (notify) ctx.ui.notify(`Sentinel unavailable: ${String(error)}`, "error");
     }
@@ -122,7 +111,7 @@ export default function (pi: ExtensionAPI) {
     if (await healthy()) {
       warnedDown = false;
     } else {
-      ctx.ui.notify("Sentinel is not running; tool gates are fail-open.", "warning");
+      ctx.ui.notify("Sentinel off; fail-open.", "warning");
       warnedDown = true;
     }
 
@@ -157,7 +146,7 @@ export default function (pi: ExtensionAPI) {
       lastDecision = "fail-open";
       await refreshUi(ctx);
       if (!warnedDown) {
-        ctx.ui.notify(`Sentinel unavailable; allowing tools fail-open (${String(error)})`, "warning");
+        ctx.ui.notify(`Sentinel off; fail-open (${String(error)})`, "warning");
         warnedDown = true;
       }
     }
@@ -183,18 +172,15 @@ export default function (pi: ExtensionAPI) {
   });
 
   pi.registerCommand("sentinel-state", {
-    description: "Show verbose Sentinel FSM state",
+    description: "Show Sentinel state",
     handler: async (_args, ctx) => {
       try {
         const [health, state] = await Promise.all([get("/health"), get("/state")]);
         ctx.ui.notify(
           [
-            `Sentinel: ${health.status} @ ${SENTINEL_URL}`,
-            `State: ${state.current} — ${state.description}`,
-            `Receipts: ${health.chain_length}`,
-            `Uptime: ${Math.floor((health.uptime ?? 0) / 60)}m`,
-            `Allowed: ${state.allowed_tools.join(", ")}`,
-            `Transitions: ${formatTransitions(state.available_transitions)}`,
+            `🛡 ${state.current} · ${health.chain_length}r · ${Math.floor((health.uptime ?? 0) / 60)}m`,
+            `allow ${state.allowed_tools.join(", ")}`,
+            `next ${formatTransitions(state.available_transitions)}`,
           ].join("\n"),
           "info",
         );
@@ -206,7 +192,7 @@ export default function (pi: ExtensionAPI) {
   });
 
   pi.registerCommand("sentinel-ui", {
-    description: "Control Sentinel widget: /sentinel-ui <on|off|toggle|verbose|compact|refresh>",
+    description: "Control Sentinel widget",
     handler: async (args, ctx) => {
       const action = args.trim().toLowerCase() || "toggle";
       if (action === "on") widgetVisible = true;
@@ -223,7 +209,7 @@ export default function (pi: ExtensionAPI) {
   });
 
   pi.registerCommand("sentinel-transition", {
-    description: "Transition Sentinel FSM state, e.g. /sentinel-transition planning",
+    description: "Transition Sentinel state",
     handler: async (args, ctx) => {
       const toState = args.trim();
       if (!toState) {
@@ -232,7 +218,7 @@ export default function (pi: ExtensionAPI) {
       }
       try {
         const state = await post("/transition", { to_state: toState, reason: "pi command" });
-        ctx.ui.notify(`Sentinel transitioned: ${state.previous} -> ${state.current}`, "info");
+        ctx.ui.notify(`🛡 ${state.previous} → ${state.current}`, "info");
         await refreshUi(ctx);
       } catch (error) {
         ctx.ui.notify(`Sentinel transition failed: ${String(error)}`, "error");

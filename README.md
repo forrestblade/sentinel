@@ -1,34 +1,37 @@
 # Sentinel
 
-State-based tool gating and cryptographic receipt system for [Claude Code](https://docs.anthropic.com/en/docs/claude-code).
+State-based tool gating and cryptographic receipt system for Claude Code and [pi](https://github.com/earendil-works/pi-coding-agent).
 
-Sentinel enforces **deterministic tool access controls** outside the LLM's reasoning loop and produces **tamper-evident audit trails** of every tool execution. Unlike prompt-based guardrails, Sentinel cannot be bypassed by prompt injection, jailbreaks, or model misinterpretation — enforcement happens in code, not in context.
+Sentinel keeps tool policy enforcement outside the model's prompt/context. It gates every tool call with deterministic Python code, then records tamper-evident receipts for the calls that run.
+
+## Why Sentinel?
+
+Prompt-only guardrails can be ignored, misread, or overridden by prompt injection. Sentinel enforces policy in a local service:
+
+- **Deterministic allow/deny decisions** from a finite state machine (FSM)
+- **Regex-based tool allowlists** per workflow state
+- **Optional guarded transitions** based on tool inputs
+- **Ed25519-signed receipts** for auditability
+- **SHA-256 hash chaining** so receipt edits, deletions, and reordering are detectable
+- **Fail-open behavior** if the server is unavailable, so coding sessions are not bricked
 
 ## How It Works
 
-Sentinel intercepts every Claude Code tool call via [hooks](https://docs.anthropic.com/en/docs/claude-code/hooks) and enforces two security primitives:
-
-### 1. State-Based Tool Gating
-
-A finite state machine (FSM) controls which tools are available at each workflow phase. The orchestration layer intercepts tool calls via Claude Code's `PreToolUse` hook and blocks any tool not in the current state's allowlist.
-
-```
-Claude wants to call Write
+```text
+Tool call requested
     ↓
-PreToolUse hook → HTTP POST localhost:9800/gate
+Pre-tool hook / extension event → POST http://127.0.0.1:9800/gate
     ↓
-Sentinel checks: current state is "planning"
-    planning allows: [Read, Glob, Grep, WebFetch, Agent, mcp__.*]
-    Write is NOT in that list → BLOCKED (exit 2)
+Sentinel checks current FSM state, allowed tools, and transition guards
+    ↓ allow/deny
+If allowed, the tool runs
     ↓
-Claude Code prevents the tool from executing
+Post-tool hook / extension event → POST http://127.0.0.1:9800/receipt
+    ↓
+Sentinel hashes input/output, links to previous receipt, signs, appends JSONL
 ```
 
-The model cannot talk its way past this. A prompt injection that says "ignore all rules" still hits the HTTP hook, which still checks the allowlist in deterministic Python code.
-
-### 2. Cryptographic Receipts
-
-Every tool execution produces an Ed25519-signed, SHA-256 hash-chained receipt proving the tool actually ran with specific inputs and outputs.
+Example receipt:
 
 ```json
 {
@@ -44,42 +47,36 @@ Every tool execution produces an Ed25519-signed, SHA-256 hash-chained receipt pr
 }
 ```
 
-- **Ed25519 signatures** — each receipt is signed with a private key that never enters the LLM's context
-- **SHA-256 hash chain** — each receipt commits to the hash of the previous receipt; modifying any entry breaks the chain
-- **LLMs cannot forge these** — tokenization makes hash computation impossible for language models
-
-## Architecture
-
-```
-Claude tool call
-    ↓
-PreToolUse hook → HTTP POST localhost:9800/gate
-    ↓
-Sentinel: check FSM state → tool in allowlist? → guards pass?
-    ↓ allow/deny
-If allowed → tool executes → PostToolUse hook → HTTP POST /receipt
-    ↓
-Sentinel: hash(input) + hash(output) → chain to prev receipt → Ed25519 sign → append JSONL
-```
-
-Components:
-- **HTTP server** (aiohttp) — maintains FSM state, handles gating decisions, generates receipts
-- **CLI** — init, start/stop, status, verify chain, audit trail
-- **MCP server** — lets Claude query its own state and receipts via [Model Context Protocol](https://modelcontextprotocol.io/)
-
 ## Installation
 
+Requirements: Python 3.12+
+
 ```bash
+git clone https://github.com/forrestblade/sentinel.git
+cd sentinel
 pip install -e .
 sentinel init
 sentinel start --daemon
+sentinel status
+```
+
+For development:
+
+```bash
+pip install -e ".[dev]"
+pytest tests/ -v
 ```
 
 ## Configuration
 
-Edit `~/.config/sentinel/sentinel.yaml`:
+Sentinel writes its default config to `~/.config/sentinel/sentinel.yaml` during `sentinel init`.
 
 ```yaml
+server:
+  host: "127.0.0.1"
+  port: 9800
+  data_dir: "~/.config/sentinel/data"
+
 fsm:
   initial_state: "idle"
 
@@ -116,44 +113,21 @@ fsm:
           pattern: "^(pnpm|npm)\\s+test"
     - { from: testing, to: developing, trigger: manual }
     - { from: developing, to: reviewing, trigger: manual }
+    - { from: reviewing, to: developing, trigger: manual }
     - { from: "*", to: idle, trigger: manual }
 ```
 
-Tool allowlists use regex patterns. Guards match tool input fields against regex patterns to trigger automatic state transitions.
-
-## Pi Integration
-
-Sentinel can run as a [pi](https://github.com/earendil-works/pi-coding-agent) extension using `pi-extension/index.ts`. The extension gates every pi tool call through `/gate`, records every tool result through `/receipt`, and adds a live status widget plus commands:
-
-- `/sentinel-state` — show verbose server/FSM/receipt status
-- `/sentinel-ui <on|off|toggle|verbose|compact|refresh>` — control the live widget
-- `/sentinel-transition <state>` — manually transition FSM state
-
-Install globally:
-
-```bash
-mkdir -p ~/.pi/agent/extensions/sentinel
-cp pi-extension/index.ts ~/.pi/agent/extensions/sentinel/index.ts
-pi /reload
-```
-
-Optional environment variables:
-
-- `SENTINEL_URL` — default `http://127.0.0.1:9800`
-- `SENTINEL_COMMAND` — command used to auto-start Sentinel, default `sentinel`
-- `SENTINEL_CONFIG` — config path passed as `sentinel --config <path> start`
-
-Pi tool names are lowercase (`read`, `bash`, `write`, `edit`). A minimal read-only planning state for pi looks like:
-
-```yaml
-planning:
-  description: "Read-only exploration in pi"
-  allowed_tools: ["read", "multi_tool_use\\.parallel"]
-```
+Tool names are matched as regular expressions. Guards match fields in the tool input and can trigger automatic state transitions.
 
 ## Claude Code Integration
 
-Add hooks to `~/.claude/settings.json`:
+Print the hook config:
+
+```bash
+sentinel install-hooks
+```
+
+Add the emitted hooks to `~/.claude/settings.json`:
 
 ```json
 {
@@ -177,22 +151,65 @@ Add hooks to `~/.claude/settings.json`:
 Register the MCP server:
 
 ```bash
-claude mcp add --scope user -t stdio sentinel -- python3 -m sentinel.mcp_server
+sentinel install-mcp
+# or:
+claude mcp add --scope user -t stdio sentinel -- python -m sentinel.mcp_server
+```
+
+## pi Integration
+
+Sentinel can also run as a pi extension. The extension:
+
+- gates every pi tool call through `/gate`
+- records every pi tool result through `/receipt`
+- auto-starts Sentinel on session start when possible
+- shows a live status widget and status-line entry
+- adds commands for state, transitions, and widget controls
+
+Install:
+
+```bash
+mkdir -p ~/.pi/agent/extensions/sentinel
+cp pi-extension/index.ts ~/.pi/agent/extensions/sentinel/index.ts
+pi /reload
+```
+
+Commands:
+
+- `/sentinel-state` — show server, FSM, allowed tools, transitions, and receipt count
+- `/sentinel-transition <state>` — manually transition FSM state
+- `/sentinel-ui <on|off|toggle|verbose|compact|refresh>` — control the live widget
+
+Optional environment variables:
+
+- `SENTINEL_URL` — default `http://127.0.0.1:9800`
+- `SENTINEL_COMMAND` — command used to auto-start Sentinel, default `sentinel`
+- `SENTINEL_CONFIG` — config path passed as `sentinel --config <path> start`
+
+pi tool names are lowercase (`read`, `bash`, `write`, `edit`). A minimal read-only planning state for pi:
+
+```yaml
+planning:
+  description: "Read-only exploration in pi"
+  allowed_tools: ["read", "multi_tool_use\\.parallel"]
 ```
 
 ## CLI
 
-```
-sentinel init                  # Generate keys, create config
-sentinel start [--daemon]      # Start the HTTP server
-sentinel stop                  # Stop the server
-sentinel status                # Show server, FSM state, chain length
-sentinel state                 # Detailed FSM state + available transitions
-sentinel transition <state>    # Manually change state
-sentinel verify                # Verify receipt chain integrity
-sentinel audit [-n 20]         # View receipt audit trail
-sentinel install-hooks         # Print hook config JSON
-sentinel install-mcp           # Print MCP registration command
+```text
+sentinel --config <path> init       # Generate keys and config
+sentinel start [--daemon]          # Start the HTTP server
+sentinel stop                      # Stop the server
+sentinel status                    # Show server, FSM state, chain length
+sentinel state                     # Detailed FSM state and transitions
+sentinel transition <state>        # Manually change state
+sentinel verify                    # Verify receipt chain integrity
+sentinel audit [-n 20]             # View receipt audit trail
+sentinel audit --tool Bash         # Filter by tool
+sentinel audit --state developing  # Filter by state
+sentinel audit --event gate_allow  # Filter by event
+sentinel install-hooks             # Print Claude Code hook JSON
+sentinel install-mcp               # Print MCP registration command
 ```
 
 ## MCP Tools
@@ -206,26 +223,25 @@ When registered as an MCP server, Claude can query its own enforcement state:
 - `verify_chain` — verify receipt chain integrity
 - `get_receipt` — look up a specific receipt by ID
 
+## HTTP API
+
+- `GET /health` — server health, uptime, current state, receipt count
+- `GET /state` — current FSM state, allowed tools, available transitions
+- `POST /gate` — gate a tool call
+- `POST /receipt` — append a signed receipt for a tool result
+- `POST /transition` — manually transition state
+
 ## Failsafe Behavior
 
-If the sentinel server is down, Claude Code treats HTTP hook connection errors as non-blocking — tools continue to work normally. Sentinel is a safety overlay, not a hard dependency. Missing receipts are detectable as gaps in the chain.
+Sentinel is a safety overlay, not a hard runtime dependency. If the server is down, integrations allow tool calls to continue. Missing receipts or altered history are still detectable when verifying the chain.
 
-## Design Decisions
+## Design Notes
 
-- **HTTP hooks over command hooks** — near-zero latency, server maintains state in memory
-- **JSONL over SQLite** — append-only semantics match receipt chain model, trivially verifiable line by line
-- **Ed25519 over HMAC** — externally verifiable (anyone with the public key can verify, no shared secret needed)
-- **UUIDv7 over UUIDv4** — time-ordered IDs sort chronologically without a separate index
-- **Atomic state writes** — `os.replace()` prevents corrupt state from partial writes
-
-## Testing
-
-```bash
-pip install -e ".[dev]"
-pytest tests/ -v
-```
-
-69 tests covering crypto operations, FSM engine, receipt chain integrity, HTTP server endpoints, and tamper detection.
+- **HTTP hooks over command hooks** — low latency and in-memory FSM state
+- **JSONL over SQLite** — simple append-only receipt log
+- **Ed25519 over HMAC** — externally verifiable signatures
+- **UUIDv7 over UUIDv4** — chronological receipt IDs
+- **Atomic state writes** — `os.replace()` prevents partial state files
 
 ## License
 
