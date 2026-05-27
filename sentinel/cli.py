@@ -17,6 +17,32 @@ DEFAULT_CONFIG_DIR = Path.home() / ".config" / "sentinel"
 DEFAULT_CONFIG_PATH = DEFAULT_CONFIG_DIR / "sentinel.yaml"
 DEFAULT_DATA_DIR = DEFAULT_CONFIG_DIR / "data"
 
+
+def _is_process_running(pid: int) -> bool:
+    """Return True if pid appears to be alive on POSIX or Windows."""
+    if os.name == "nt":
+        import ctypes
+        kernel32 = ctypes.windll.kernel32
+        handle = kernel32.OpenProcess(0x1000, False, pid)  # PROCESS_QUERY_LIMITED_INFORMATION
+        if handle:
+            kernel32.CloseHandle(handle)
+            return True
+        return False
+    try:
+        os.kill(pid, 0)
+        return True
+    except ProcessLookupError:
+        return False
+
+
+def _terminate_process(pid: int) -> None:
+    if os.name == "nt":
+        subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"], check=True,
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    else:
+        os.kill(pid, signal.SIGTERM)
+
+
 EXAMPLE_CONFIG = """\
 server:
   host: "127.0.0.1"
@@ -122,12 +148,10 @@ def start(ctx: click.Context, host: str | None, port: int | None, daemon: bool) 
 
     if pid_path.exists():
         pid = int(pid_path.read_text().strip())
-        try:
-            os.kill(pid, 0)
+        if _is_process_running(pid):
             click.echo(f"Sentinel already running (PID {pid})", err=True)
             sys.exit(1)
-        except ProcessLookupError:
-            pid_path.unlink()
+        pid_path.unlink()
 
     if daemon:
         h = host or config.server.host
@@ -163,9 +187,9 @@ def stop(ctx: click.Context) -> None:
 
     pid = int(pid_path.read_text().strip())
     try:
-        os.kill(pid, signal.SIGTERM)
+        _terminate_process(pid)
         click.echo(f"Sentinel stopped (PID {pid}).")
-    except ProcessLookupError:
+    except (ProcessLookupError, subprocess.CalledProcessError):
         click.echo("Sentinel was not running (stale PID file).")
     finally:
         if pid_path.exists():
@@ -188,10 +212,9 @@ def status(ctx: click.Context) -> None:
     pid_path = data_dir / "sentinel.pid"
     if pid_path.exists():
         pid = int(pid_path.read_text().strip())
-        try:
-            os.kill(pid, 0)
+        if _is_process_running(pid):
             click.echo(f"Server: running (PID {pid}) on {config.server.host}:{config.server.port}")
-        except ProcessLookupError:
+        else:
             click.echo("Server: not running (stale PID)")
     else:
         click.echo("Server: not running")

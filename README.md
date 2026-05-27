@@ -121,6 +121,36 @@ fsm:
 
 Tool allowlists use regex patterns. Guards match tool input fields against regex patterns to trigger automatic state transitions.
 
+## Pi Integration
+
+Sentinel can run as a [pi](https://github.com/earendil-works/pi-coding-agent) extension using `pi-extension/index.ts`. The extension gates every pi tool call through `/gate`, records every tool result through `/receipt`, and adds a live status widget plus commands:
+
+- `/sentinel-state` — show verbose server/FSM/receipt status
+- `/sentinel-ui <on|off|toggle|verbose|compact|refresh>` — control the live widget
+- `/sentinel-transition <state>` — manually transition FSM state
+
+Install globally:
+
+```bash
+mkdir -p ~/.pi/agent/extensions/sentinel
+cp pi-extension/index.ts ~/.pi/agent/extensions/sentinel/index.ts
+pi /reload
+```
+
+Optional environment variables:
+
+- `SENTINEL_URL` — default `http://127.0.0.1:9800`
+- `SENTINEL_COMMAND` — command used to auto-start Sentinel, default `sentinel`
+- `SENTINEL_CONFIG` — config path passed as `sentinel --config <path> start`
+
+Pi tool names are lowercase (`read`, `bash`, `write`, `edit`). A minimal read-only planning state for pi looks like:
+
+```yaml
+planning:
+  description: "Read-only exploration in pi"
+  allowed_tools: ["read", "multi_tool_use\\.parallel"]
+```
+
 ## Claude Code Integration
 
 Add hooks to `~/.claude/settings.json`:

@@ -2,6 +2,8 @@
 
 import os
 
+import pytest
+
 from sentinel.crypto import (
     generate_keypair,
     load_private_key,
@@ -19,6 +21,7 @@ def test_generate_keypair_creates_files(tmp_path):
     assert (key_dir / "sentinel.pub").exists()
 
 
+@pytest.mark.skipif(os.name == "nt", reason="POSIX file modes are not represented faithfully on Windows")
 def test_private_key_permissions(tmp_path):
     key_dir = tmp_path / "keys"
     generate_keypair(key_dir)

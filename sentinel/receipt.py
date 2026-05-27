@@ -1,8 +1,13 @@
 """Cryptographic receipt chain with Ed25519 signing and SHA-256 hash linking."""
 
-import fcntl
 import json
+import os
 import time
+
+if os.name == "posix":
+    import fcntl
+else:
+    fcntl = None
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -124,11 +129,14 @@ class ReceiptChain:
         line = json.dumps(receipt.to_dict(), separators=(",", ":")) + "\n"
 
         with open(self._chain_path, "a") as f:
-            fcntl.flock(f, fcntl.LOCK_EX)
-            try:
+            if fcntl is None:
                 f.write(line)
-            finally:
-                fcntl.flock(f, fcntl.LOCK_UN)
+            else:
+                fcntl.flock(f, fcntl.LOCK_EX)
+                try:
+                    f.write(line)
+                finally:
+                    fcntl.flock(f, fcntl.LOCK_UN)
 
         self._prev_hash = sha256_hex(receipt.canonical_bytes())
         self._seq += 1
