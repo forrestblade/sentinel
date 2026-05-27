@@ -6,6 +6,19 @@ const SENTINEL_COMMAND = process.env.SENTINEL_COMMAND ?? "sentinel";
 const SENTINEL_CONFIG = process.env.SENTINEL_CONFIG;
 
 type Transition = { to: string; trigger: string; guards?: Array<{ field: string; pattern: string }> };
+type SentinelState =
+  | "idle"
+  | "thinking"
+  | "planning"
+  | "reading"
+  | "writing"
+  | "testing"
+  | "committing"
+  | "pushing"
+  | "developing"
+  | "reviewing";
+
+type InferredState = { state: SentinelState; reason: string };
 
 async function post(path: string, body: unknown, signal?: AbortSignal) {
   const response = await fetch(`${SENTINEL_URL}${path}`, {
@@ -62,20 +75,65 @@ function formatToolList(tools: string[] = [], max = 6) {
   return `${tools.slice(0, max).join(", ")} +${tools.length - max} more`;
 }
 
-function looksLikePlanningRequest(text: string) {
+function inferStateFromText(text: string): InferredState {
   const normalized = text.toLowerCase();
-  return (
-    /\b(plan|planning|design|approach|outline|review|inspect|investigate|analy[sz]e|think through|look into)\b/.test(normalized) ||
+  if (/\b(push|publish|upload)\b.*\b(commit|branch|remote|origin)\b|\bgit\s+push\b/.test(normalized)) {
+    return { state: "pushing", reason: "user context mentions pushing" };
+  }
+  if (/\b(commit|committing)\b|\bgit\s+commit\b/.test(normalized)) {
+    return { state: "committing", reason: "user context mentions committing" };
+  }
+  if (/\b(test|tests|testing|pytest|cargo\s+test|npm\s+test|pnpm\s+test)\b/.test(normalized)) {
+    return { state: "testing", reason: "user context mentions testing" };
+  }
+  if (/\b(review|reviewing|audit|inspect|investigate|analy[sz]e|look into)\b/.test(normalized)) {
+    return { state: "reviewing", reason: "user context requests review/inspection" };
+  }
+  if (
+    /\b(plan|planning|design|approach|outline|think through)\b/.test(normalized) ||
     /\b(no code|read[- ]only|don'?t (edit|change|write|modify)|without (editing|changing|writing|modifying))\b/.test(normalized)
-  );
+  ) {
+    return { state: "planning", reason: "user context requests planning" };
+  }
+  if (/\b(read|show|open|find|search|grep|list|status|diff|log)\b/.test(normalized)) {
+    return { state: "reading", reason: "user context requests reading" };
+  }
+  if (/\b(write|edit|change|modify|implement|fix|add|remove|refactor|update)\b/.test(normalized)) {
+    return { state: "writing", reason: "user context requests writing" };
+  }
+  return { state: "thinking", reason: "user context requires thinking" };
 }
 
 function isTestCommand(command: string) {
   return /\b(npm|pnpm|yarn|bun)\s+(run\s+)?test\b|\b(pytest|cargo\s+test|go\s+test|dotnet\s+test|mvn\s+test|gradle\s+test)\b/.test(command);
 }
 
+function isCommitCommand(command: string) {
+  return /^\s*git\s+commit\b/.test(command);
+}
+
+function isPushCommand(command: string) {
+  return /^\s*git\s+push\b/.test(command);
+}
+
 function isReadOnlyBash(command: string) {
   return /^\s*(ls|dir|pwd|echo|cat|type|find|rg|grep|git\s+(status|diff|log|show|branch)|npm\s+ls|pnpm\s+ls)\b/.test(command);
+}
+
+function inferStateFromToolCall(toolName: string, input: any): InferredState | undefined {
+  if (toolName === "bash" && typeof input?.command === "string") {
+    const command = input.command;
+    if (isTestCommand(command)) return { state: "testing", reason: "bash command runs tests" };
+    if (isCommitCommand(command)) return { state: "committing", reason: "bash command creates commit" };
+    if (isPushCommand(command)) return { state: "pushing", reason: "bash command pushes commits" };
+    if (isReadOnlyBash(command)) return { state: "reading", reason: "bash command is read-only" };
+    return { state: "writing", reason: "bash command may change files" };
+  }
+
+  if (toolName === "read") return { state: "reading", reason: "read tool called" };
+  if (["edit", "write"].includes(toolName)) return { state: "writing", reason: `${toolName} tool called` };
+  if (toolName === "multi_tool_use.parallel") return { state: "reading", reason: "parallel tool call started" };
+  return undefined;
 }
 
 export default function (pi: ExtensionAPI) {
@@ -87,7 +145,7 @@ export default function (pi: ExtensionAPI) {
   let verboseWidget = false;
   let lastDecision = "startup";
   let lastTool = "none";
-  let nextAgentState: "planning" | "developing" = "developing";
+  let nextAgentState: InferredState = { state: "thinking", reason: "startup" };
   let refreshTimer: ReturnType<typeof setInterval> | undefined;
 
   function sessionPayload(ctx: ExtensionContext, reason: string) {
@@ -176,7 +234,7 @@ export default function (pi: ExtensionAPI) {
   pi.on("session_shutdown", async (event, ctx) => {
     if (refreshTimer) clearInterval(refreshTimer);
     refreshTimer = undefined;
-    nextAgentState = "developing";
+    nextAgentState = { state: "thinking", reason: "session shutdown" };
     if (["quit", "new", "resume", "fork"].includes(event.reason)) {
       try {
         await endSession(ctx, event.reason);
@@ -189,22 +247,22 @@ export default function (pi: ExtensionAPI) {
   });
 
   pi.on("input", async (event) => {
-    nextAgentState = looksLikePlanningRequest(event.text) ? "planning" : "developing";
+    nextAgentState = inferStateFromText(event.text);
     return { action: "continue" };
   });
 
   pi.on("before_agent_start", async (event) => {
-    // Re-check after input transforms/templates/skills so expanded planning prompts count too.
-    nextAgentState = looksLikePlanningRequest(event.prompt) ? "planning" : nextAgentState;
+    // Re-check after input transforms/templates/skills so expanded context drives the state.
+    nextAgentState = inferStateFromText(event.prompt);
   });
 
   pi.on("agent_start", async (_event, ctx) => {
-    await transition(ctx, nextAgentState, `pi agent started (${nextAgentState})`);
+    await transition(ctx, nextAgentState.state, `pi agent started: ${nextAgentState.reason}`);
     await refreshUi(ctx);
   });
 
   pi.on("agent_end", async (_event, ctx) => {
-    nextAgentState = "developing";
+    nextAgentState = { state: "thinking", reason: "agent ended" };
     await transition(ctx, "idle", "pi agent ended");
     await refreshUi(ctx);
   });
@@ -212,17 +270,9 @@ export default function (pi: ExtensionAPI) {
   pi.on("tool_call", async (event, ctx) => {
     lastTool = event.toolName;
 
-    if (event.toolName === "bash" && typeof event.input?.command === "string") {
-      const command = event.input.command;
-      if (isTestCommand(command)) {
-        await transition(ctx, "testing", "pi running tests");
-        await refreshUi(ctx);
-      } else if (!isReadOnlyBash(command)) {
-        await transition(ctx, "developing", "pi bash command may change state");
-        await refreshUi(ctx);
-      }
-    } else if (["edit", "write"].includes(event.toolName)) {
-      await transition(ctx, "developing", `pi ${event.toolName} tool called`);
+    const inferred = inferStateFromToolCall(event.toolName, event.input);
+    if (inferred) {
+      await transition(ctx, inferred.state, `pi tool context: ${inferred.reason}`);
       await refreshUi(ctx);
     }
 
