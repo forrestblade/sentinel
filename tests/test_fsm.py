@@ -32,31 +32,31 @@ def test_state_reloads_from_disk(sample_config, data_dir):
 def test_tool_allowed_wildcard(sample_config, data_dir):
     fsm = SentinelFSM(sample_config.fsm, data_dir / "state.json")
     # idle allows ".*"
-    allowed, _ = fsm.is_tool_allowed("Bash")
+    allowed, _ = fsm.is_tool_allowed("bash")
     assert allowed
-    allowed, _ = fsm.is_tool_allowed("Write")
+    allowed, _ = fsm.is_tool_allowed("write")
     assert allowed
 
 
 def test_tool_denied_in_restricted_state(sample_config, data_dir):
     fsm = SentinelFSM(sample_config.fsm, data_dir / "state.json")
     fsm.transition_to("planning")
-    allowed, reason = fsm.is_tool_allowed("Write")
+    allowed, reason = fsm.is_tool_allowed("write")
     assert not allowed
-    assert "Write" in reason
+    assert "write" in reason
 
 
 def test_tool_allowed_in_restricted_state(sample_config, data_dir):
     fsm = SentinelFSM(sample_config.fsm, data_dir / "state.json")
     fsm.transition_to("planning")
-    allowed, _ = fsm.is_tool_allowed("Read")
+    allowed, _ = fsm.is_tool_allowed("read")
     assert allowed
 
 
-def test_mcp_tool_pattern_matching(sample_config, data_dir):
+def test_parallel_tool_pattern_matching(sample_config, data_dir):
     fsm = SentinelFSM(sample_config.fsm, data_dir / "state.json")
     fsm.transition_to("planning")
-    allowed, _ = fsm.is_tool_allowed("mcp__jcodemunch__get_file")
+    allowed, _ = fsm.is_tool_allowed("multi_tool_use.parallel")
     assert allowed
 
 
@@ -77,28 +77,28 @@ def test_transition_to_invalid_state(sample_config, data_dir):
 def test_auto_transition_with_guard(sample_config, data_dir):
     fsm = SentinelFSM(sample_config.fsm, data_dir / "state.json")
     fsm.transition_to("developing")
-    target = fsm.evaluate_transition("Bash", {"command": "pnpm test"})
+    target = fsm.evaluate_transition("bash", {"command": "pnpm test"})
     assert target == "testing"
 
 
 def test_auto_transition_guard_no_match(sample_config, data_dir):
     fsm = SentinelFSM(sample_config.fsm, data_dir / "state.json")
     fsm.transition_to("developing")
-    target = fsm.evaluate_transition("Bash", {"command": "ls -la"})
+    target = fsm.evaluate_transition("bash", {"command": "ls -la"})
     assert target is None
 
 
 def test_auto_transition_wrong_tool(sample_config, data_dir):
     fsm = SentinelFSM(sample_config.fsm, data_dir / "state.json")
     fsm.transition_to("developing")
-    target = fsm.evaluate_transition("Read", {"file_path": "/test"})
+    target = fsm.evaluate_transition("read", {"file_path": "/test"})
     assert target is None
 
 
 def test_manual_transitions_not_auto_triggered(sample_config, data_dir):
     fsm = SentinelFSM(sample_config.fsm, data_dir / "state.json")
     # idle->planning is manual, should not auto-trigger
-    target = fsm.evaluate_transition("Read", {})
+    target = fsm.evaluate_transition("read", {})
     assert target is None
 
 

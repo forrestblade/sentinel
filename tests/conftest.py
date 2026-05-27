@@ -20,7 +20,7 @@ SAMPLE_CONFIG = {
             },
             "planning": {
                 "description": "Read-only exploration",
-                "allowed_tools": ["Read", "Glob", "Grep", "WebFetch", "Agent", "mcp__.*"],
+                "allowed_tools": ["read", "bash", "multi_tool_use\\.parallel"],
             },
             "developing": {
                 "description": "Full tool access",
@@ -28,7 +28,7 @@ SAMPLE_CONFIG = {
             },
             "testing": {
                 "description": "Test execution only",
-                "allowed_tools": ["Read", "Glob", "Grep", "Bash", "mcp__.*"],
+                "allowed_tools": ["read", "bash", "multi_tool_use\\.parallel"],
             },
         },
         "transitions": [
@@ -38,7 +38,7 @@ SAMPLE_CONFIG = {
             {
                 "from": "developing",
                 "to": "testing",
-                "trigger": "Bash",
+                "trigger": "bash",
                 "guards": [{"field": "command", "pattern": "^(pnpm|npm)\\s+test"}],
             },
             {"from": "testing", "to": "developing", "trigger": "manual"},

@@ -1,8 +1,8 @@
 # Sentinel
 
-State-based tool gating and cryptographic receipt system for Claude Code and [pi](https://pi.dev/).
+State-based tool gating and cryptographic receipt system for [pi](https://pi.dev/).
 
-Sentinel keeps tool policy enforcement outside the model's prompt/context. It gates every tool call with deterministic Python code, then records tamper-evident receipts for the calls that run.
+Sentinel keeps tool policy enforcement outside the model's prompt/context. It gates pi tool calls with deterministic Python code, then records tamper-evident receipts for the calls that run.
 
 ## Why Sentinel?
 
@@ -18,15 +18,15 @@ Prompt-only guardrails can be ignored, misread, or overridden by prompt injectio
 ## How It Works
 
 ```text
-Tool call requested
+pi tool call requested
     ↓
-Pre-tool hook / extension event → POST http://127.0.0.1:9800/gate
+pi extension → POST http://127.0.0.1:9800/gate
     ↓
 Sentinel checks current FSM state, allowed tools, and transition guards
     ↓ allow/deny
 If allowed, the tool runs
     ↓
-Post-tool hook / extension event → POST http://127.0.0.1:9800/receipt
+pi extension → POST http://127.0.0.1:9800/receipt
     ↓
 Sentinel hashes input/output, links to previous receipt, signs, appends session JSONL
 ```
@@ -39,7 +39,7 @@ Example receipt:
 {
   "id": "019d1238-481f-70fa-...",
   "seq": 42,
-  "tool_name": "Edit",
+  "tool_name": "edit",
   "tool_input_hash": "sha256:a3f2...",
   "tool_output_hash": "sha256:7b91...",
   "state": "developing",
@@ -89,7 +89,7 @@ fsm:
 
     planning:
       description: "Read-only exploration"
-      allowed_tools: ["Read", "Glob", "Grep", "WebFetch", "WebSearch", "Agent", "mcp__.*"]
+      allowed_tools: ["read", "bash", "multi_tool_use\\.parallel"]
 
     developing:
       description: "Full tool access"
@@ -97,11 +97,11 @@ fsm:
 
     testing:
       description: "Test execution only"
-      allowed_tools: ["Read", "Glob", "Grep", "Bash", "mcp__.*"]
+      allowed_tools: ["read", "bash", "multi_tool_use\\.parallel"]
 
     reviewing:
       description: "Read-only review"
-      allowed_tools: ["Read", "Glob", "Grep", "WebFetch", "mcp__.*"]
+      allowed_tools: ["read", "bash", "multi_tool_use\\.parallel"]
 
   transitions:
     - { from: idle, to: planning, trigger: manual }
@@ -109,7 +109,7 @@ fsm:
     - { from: planning, to: developing, trigger: manual }
     - from: developing
       to: testing
-      trigger: Bash
+      trigger: bash
       guards:
         - field: command
           pattern: "^(pnpm|npm)\\s+test"
@@ -121,51 +121,15 @@ fsm:
 
 Tool names are matched as regular expressions. Guards match fields in the tool input and can trigger automatic state transitions.
 
-## Claude Code Integration
-
-Print the hook config:
-
-```bash
-sentinel install-hooks
-```
-
-Add the emitted hooks to `~/.claude/settings.json`:
-
-```json
-{
-  "hooks": {
-    "PreToolUse": [
-      {
-        "matcher": ".*",
-        "hooks": [{ "type": "http", "url": "http://127.0.0.1:9800/gate", "timeout": 5 }]
-      }
-    ],
-    "PostToolUse": [
-      {
-        "matcher": ".*",
-        "hooks": [{ "type": "http", "url": "http://127.0.0.1:9800/receipt", "timeout": 5 }]
-      }
-    ]
-  }
-}
-```
-
-Register the MCP server:
-
-```bash
-sentinel install-mcp
-# or:
-claude mcp add --scope user -t stdio sentinel -- python -m sentinel.mcp_server
-```
-
 ## pi Integration
 
-Sentinel can also run as a pi extension. The extension:
+Sentinel runs as a pi extension. The extension:
 
 - gates every pi tool call through `/gate`
 - records every pi tool result through `/receipt`
 - starts/resumes a separate receipt log for each pi session through `/session`
 - auto-starts Sentinel on session start when possible
+- auto-transitions FSM state from pi activity (`planning`, `developing`, `testing`, `idle`)
 - shows a live status-line entry, with an optional widget
 - adds commands for state, transitions, and widget controls
 
@@ -174,8 +138,9 @@ Install:
 ```bash
 mkdir -p ~/.pi/agent/extensions/sentinel
 cp pi-extension/index.ts ~/.pi/agent/extensions/sentinel/index.ts
-pi /reload
 ```
+
+Then start pi or run `/reload` inside an existing pi session.
 
 Commands:
 
@@ -189,13 +154,7 @@ Optional environment variables:
 - `SENTINEL_COMMAND` — command used to auto-start Sentinel, default `sentinel`
 - `SENTINEL_CONFIG` — config path passed as `sentinel --config <path> start`
 
-pi tool names are lowercase (`read`, `bash`, `write`, `edit`). A minimal read-only planning state for pi:
-
-```yaml
-planning:
-  description: "Read-only exploration in pi"
-  allowed_tools: ["read", "multi_tool_use\\.parallel"]
-```
+pi tool names are lowercase (`read`, `bash`, `write`, `edit`). The default `planning` state allows read-only exploration with `read`, `bash`, and parallel read-only tool batches. The extension automatically moves to `developing` if `edit`, `write`, or a mutating shell command is requested.
 
 ## CLI
 
@@ -208,23 +167,10 @@ sentinel state                     # Detailed FSM state and transitions
 sentinel transition <state>        # Manually change state
 sentinel verify                    # Verify receipt chain integrity
 sentinel audit [-n 20]             # View receipt audit trail
-sentinel audit --tool Bash         # Filter by tool
+sentinel audit --tool bash         # Filter by tool
 sentinel audit --state developing  # Filter by state
 sentinel audit --event gate_allow  # Filter by event
-sentinel install-hooks             # Print Claude Code hook JSON
-sentinel install-mcp               # Print MCP registration command
 ```
-
-## MCP Tools
-
-When registered as an MCP server, Claude can query its own enforcement state:
-
-- `get_state` — current FSM state and transition count
-- `get_allowed_tools` — tools available in current state
-- `get_transitions` — available state transitions
-- `get_recent_receipts` — recent audit trail entries
-- `verify_chain` — verify receipt chain integrity
-- `get_receipt` — look up a specific receipt by ID
 
 ## HTTP API
 
@@ -236,13 +182,25 @@ When registered as an MCP server, Claude can query its own enforcement state:
 - `POST /receipt` — append a signed receipt for a tool result
 - `POST /transition` — manually transition state
 
+### `/gate` response
+
+```json
+{
+  "decision": "allow",
+  "reason": "Tool 'read' allowed in state 'planning'",
+  "state": "planning",
+  "receipt_id": "019d1238-481f-70fa-...",
+  "context": "[Sentinel] state=planning | receipt=... | decision=allow"
+}
+```
+
 ## Failsafe Behavior
 
-Sentinel is a safety overlay, not a hard runtime dependency. If the server is down, integrations allow tool calls to continue. Missing receipts or altered history are still detectable when verifying the chain.
+Sentinel is a safety overlay, not a hard runtime dependency. If the server is down, the pi extension allows tool calls to continue. Missing receipts or altered history are still detectable when verifying the chain.
 
 ## Design Notes
 
-- **HTTP hooks over command hooks** — low latency and in-memory FSM state
+- **HTTP sidecar over prompt policy** — low latency and in-memory FSM state
 - **JSONL over SQLite** — simple append-only receipt log
 - **Ed25519 over HMAC** — externally verifiable signatures
 - **UUIDv7 over UUIDv4** — chronological receipt IDs

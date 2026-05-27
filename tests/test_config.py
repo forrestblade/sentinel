@@ -15,8 +15,8 @@ def test_valid_config_loads(sample_config):
 
 def test_state_has_allowed_tools(sample_config):
     planning = sample_config.fsm.states["planning"]
-    assert "Read" in planning.allowed_tools
-    assert "Glob" in planning.allowed_tools
+    assert "read" in planning.allowed_tools
+    assert "bash" in planning.allowed_tools
 
 
 def test_transition_with_guards(sample_config):
@@ -131,7 +131,7 @@ def test_invalid_regex_in_guard(tmp_path):
                 "b": {"description": "y", "allowed_tools": []},
             },
             "transitions": [{
-                "from": "a", "to": "b", "trigger": "Bash",
+                "from": "a", "to": "b", "trigger": "bash",
                 "guards": [{"field": "cmd", "pattern": "[bad"}],
             }],
         }

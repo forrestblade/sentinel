@@ -50,7 +50,7 @@ async def test_session_starts_separate_receipt_log(aiohttp_client, sentinel_app)
     assert first["chain_length"] == 0
 
     await client.post("/gate", json={
-        "tool_name": "Read",
+        "tool_name": "read",
         "tool_input": {"file_path": "/test.py"},
     })
     assert (await (await client.get("/health")).json())["chain_length"] == 1
@@ -68,7 +68,7 @@ async def test_session_resume_existing_receipt_log(aiohttp_client, sentinel_app)
 
     await client.post("/session", json={"session_file": "/tmp/one.jsonl"})
     await client.post("/gate", json={
-        "tool_name": "Read",
+        "tool_name": "read",
         "tool_input": {"file_path": "/test.py"},
     })
 
@@ -120,13 +120,13 @@ async def test_state(aiohttp_client, sentinel_app):
 async def test_gate_allows_tool_in_state(aiohttp_client, sentinel_app):
     client = await aiohttp_client(sentinel_app)
     resp = await client.post("/gate", json={
-        "tool_name": "Read",
+        "tool_name": "read",
         "tool_input": {"file_path": "/test.py"},
     })
     assert resp.status == 200
     data = await resp.json()
-    assert data["hookSpecificOutput"]["permissionDecision"] == "allow"
-    assert "[Sentinel]" in data["hookSpecificOutput"]["additionalContext"]
+    assert data["decision"] == "allow"
+    assert "[Sentinel]" in data["context"]
 
 
 async def test_gate_denies_tool_not_in_state(aiohttp_client, sentinel_app):
@@ -135,18 +135,18 @@ async def test_gate_denies_tool_not_in_state(aiohttp_client, sentinel_app):
     await client.post("/transition", json={"to_state": "planning"})
     # Write is not allowed in planning
     resp = await client.post("/gate", json={
-        "tool_name": "Write",
+        "tool_name": "write",
         "tool_input": {"file_path": "/test.py"},
     })
     assert resp.status == 200
     data = await resp.json()
-    assert data["hookSpecificOutput"]["permissionDecision"] == "deny"
+    assert data["decision"] == "deny"
 
 
 async def test_gate_creates_receipt(aiohttp_client, sentinel_app):
     client = await aiohttp_client(sentinel_app)
     await client.post("/gate", json={
-        "tool_name": "Read",
+        "tool_name": "read",
         "tool_input": {"file_path": "/test.py"},
     })
     resp = await client.get("/health")
@@ -160,7 +160,7 @@ async def test_gate_auto_transition(aiohttp_client, sentinel_app):
     await client.post("/transition", json={"to_state": "developing"})
     # Bash with test command should auto-transition to testing
     await client.post("/gate", json={
-        "tool_name": "Bash",
+        "tool_name": "bash",
         "tool_input": {"command": "pnpm test"},
     })
     resp = await client.get("/state")
@@ -171,13 +171,13 @@ async def test_gate_auto_transition(aiohttp_client, sentinel_app):
 async def test_receipt_endpoint(aiohttp_client, sentinel_app):
     client = await aiohttp_client(sentinel_app)
     resp = await client.post("/receipt", json={
-        "tool_name": "Read",
+        "tool_name": "read",
         "tool_input": {"file_path": "/test.py"},
         "tool_response": {"content": "hello world"},
     })
     assert resp.status == 200
     data = await resp.json()
-    assert "receipt=" in data["hookSpecificOutput"]["additionalContext"]
+    assert "receipt=" in data["context"]
 
 
 async def test_transition_endpoint(aiohttp_client, sentinel_app):
@@ -216,14 +216,14 @@ async def test_full_flow(aiohttp_client, sentinel_app):
 
     # Gate check
     gate_resp = await client.post("/gate", json={
-        "tool_name": "Read",
+        "tool_name": "read",
         "tool_input": {"file_path": "/src/main.py"},
     })
-    assert (await gate_resp.json())["hookSpecificOutput"]["permissionDecision"] == "allow"
+    assert (await gate_resp.json())["decision"] == "allow"
 
     # Post-execution receipt
     receipt_resp = await client.post("/receipt", json={
-        "tool_name": "Read",
+        "tool_name": "read",
         "tool_input": {"file_path": "/src/main.py"},
         "tool_response": {"content": "import os\n"},
     })

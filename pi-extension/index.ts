@@ -234,11 +234,10 @@ export default function (pi: ExtensionAPI) {
         tool_call_id: event.toolCallId,
       }, ctx.signal);
 
-      const output = result?.hookSpecificOutput;
-      lastDecision = output?.permissionDecision ?? "allow";
+      lastDecision = result?.decision ?? "allow";
       await refreshUi(ctx);
-      if (output?.permissionDecision === "deny") {
-        return { block: true, reason: output.permissionDecisionReason ?? "Blocked by Sentinel" };
+      if (result?.decision === "deny") {
+        return { block: true, reason: result.reason ?? "Blocked by Sentinel" };
       }
     } catch (error) {
       lastDecision = "fail-open";
@@ -265,7 +264,7 @@ export default function (pi: ExtensionAPI) {
       }, ctx.signal);
       await refreshUi(ctx);
     } catch {
-      // Receipt generation is best-effort/fail-open, matching Sentinel's Claude hook behavior.
+      // Receipt generation is best-effort/fail-open so Sentinel never bricks pi.
     }
   });
 

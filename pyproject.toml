@@ -1,7 +1,7 @@
 [project]
 name = "sentinel"
 version = "0.1.0"
-description = "State-based tool gating and cryptographic receipt system for Claude Code"
+description = "State-based tool gating and cryptographic receipt system for pi"
 requires-python = ">=3.12"
 dependencies = [
     "aiohttp>=3.9",
@@ -19,9 +19,6 @@ dev = [
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
-mcp = [
-    "mcp[cli]",
-]
 
 [project.scripts]
 sentinel = "sentinel.cli:cli"

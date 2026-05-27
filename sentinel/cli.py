@@ -59,7 +59,7 @@ fsm:
 
     planning:
       description: "Read-only exploration"
-      allowed_tools: ["Read", "Glob", "Grep", "WebFetch", "WebSearch", "Agent", "mcp__.*"]
+      allowed_tools: ["read", "bash", "multi_tool_use\\\\.parallel"]
 
     developing:
       description: "Full tool access"
@@ -67,11 +67,11 @@ fsm:
 
     testing:
       description: "Test execution only"
-      allowed_tools: ["Read", "Glob", "Grep", "Bash", "mcp__.*"]
+      allowed_tools: ["read", "bash", "multi_tool_use\\\\.parallel"]
 
     reviewing:
       description: "Read-only review"
-      allowed_tools: ["Read", "Glob", "Grep", "WebFetch", "mcp__.*"]
+      allowed_tools: ["read", "bash", "multi_tool_use\\\\.parallel"]
 
   transitions:
     - { from: idle, to: planning, trigger: manual }
@@ -79,7 +79,7 @@ fsm:
     - { from: planning, to: developing, trigger: manual }
     - from: developing
       to: testing
-      trigger: Bash
+      trigger: bash
       guards:
         - field: command
           pattern: "^(pnpm|npm)\\\\s+test"
@@ -95,7 +95,7 @@ fsm:
               default=DEFAULT_CONFIG_PATH, help="Path to sentinel.yaml")
 @click.pass_context
 def cli(ctx: click.Context, config_path: Path) -> None:
-    """Sentinel: State-based tool gating & cryptographic receipts for Claude Code."""
+    """Sentinel: State-based tool gating & cryptographic receipts for pi."""
     ctx.ensure_object(dict)
     ctx.obj["config_path"] = config_path
 
@@ -360,39 +360,6 @@ def audit(ctx: click.Context, tool_name: str | None, state_filter: str | None,
             f"[{r.seq:04d}] {r.id}  {r.event:<14} "
             f"{r.tool_name:<20} state={r.state:<12} sig={sig_short}"
         )
-
-
-@cli.command("install-hooks")
-def install_hooks() -> None:
-    """Print the hook configuration to add to ~/.claude/settings.json."""
-    click.echo("Add the following to your ~/.claude/settings.json hooks section:\n")
-    hook_config = {
-        "PreToolUse": [{
-            "matcher": ".*",
-            "hooks": [{
-                "type": "http",
-                "url": "http://127.0.0.1:9800/gate",
-                "timeout": 5,
-            }],
-        }],
-        "PostToolUse": [{
-            "matcher": ".*",
-            "hooks": [{
-                "type": "http",
-                "url": "http://127.0.0.1:9800/receipt",
-                "timeout": 5,
-            }],
-        }],
-    }
-    click.echo(json.dumps(hook_config, indent=2))
-    click.echo("\nAppend these entries to the existing PreToolUse/PostToolUse arrays.")
-
-
-@cli.command("install-mcp")
-def install_mcp() -> None:
-    """Print the command to register the sentinel MCP server."""
-    click.echo("Run this command to register the sentinel MCP server:\n")
-    click.echo(f"  claude mcp add --scope user -t stdio sentinel -- {sys.executable} -m sentinel.mcp_server")
 
 
 if __name__ == "__main__":

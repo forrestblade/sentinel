@@ -134,7 +134,7 @@ async def handle_session_end(request: web.Request) -> web.Response:
 
 
 async def handle_gate(request: web.Request) -> web.Response:
-    """PreToolUse hook endpoint: check FSM and allow/deny tool calls."""
+    """Check FSM policy and allow or deny a tool call."""
     fsm: SentinelFSM = request.app["fsm"]
     chain: ReceiptChain = request.app["chain"]
 
@@ -160,20 +160,19 @@ async def handle_gate(request: web.Request) -> web.Response:
     decision = "allow" if allowed else "deny"
 
     return web.json_response({
-        "hookSpecificOutput": {
-            "hookEventName": "PreToolUse",
-            "permissionDecision": decision,
-            "permissionDecisionReason": reason,
-            "additionalContext": (
-                f"[Sentinel] state={fsm.get_state().current} | "
-                f"receipt={receipt.id} | decision={decision}"
-            ),
-        }
+        "decision": decision,
+        "reason": reason,
+        "state": fsm.get_state().current,
+        "receipt_id": receipt.id,
+        "context": (
+            f"[Sentinel] state={fsm.get_state().current} | "
+            f"receipt={receipt.id} | decision={decision}"
+        ),
     })
 
 
 async def handle_receipt(request: web.Request) -> web.Response:
-    """PostToolUse hook endpoint: create a receipt with tool output hash."""
+    """Create a receipt with tool output hash."""
     fsm: SentinelFSM = request.app["fsm"]
     chain: ReceiptChain = request.app["chain"]
 
@@ -192,12 +191,9 @@ async def handle_receipt(request: web.Request) -> web.Response:
     )
 
     return web.json_response({
-        "hookSpecificOutput": {
-            "hookEventName": "PostToolUse",
-            "additionalContext": (
-                f"[Sentinel] receipt={receipt.id} | chain_length={chain.length}"
-            ),
-        }
+        "receipt_id": receipt.id,
+        "chain_length": chain.length,
+        "context": f"[Sentinel] receipt={receipt.id} | chain_length={chain.length}",
     })
 
 

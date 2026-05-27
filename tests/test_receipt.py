@@ -8,8 +8,8 @@ from sentinel.receipt import Receipt, ReceiptChain
 def test_append_creates_receipt(key_pair, data_dir):
     priv, pub, _ = key_pair
     chain = ReceiptChain(data_dir / "receipts.jsonl", priv, pub)
-    receipt = chain.append("Read", {"file_path": "/test"}, {"content": "hello"}, "idle", "gate_allow")
-    assert receipt.tool_name == "Read"
+    receipt = chain.append("read", {"file_path": "/test"}, {"content": "hello"}, "idle", "gate_allow")
+    assert receipt.tool_name == "read"
     assert receipt.seq == 0
     assert receipt.event == "gate_allow"
     assert receipt.signature != ""
@@ -18,8 +18,8 @@ def test_append_creates_receipt(key_pair, data_dir):
 def test_chain_links_receipts(key_pair, data_dir):
     priv, pub, _ = key_pair
     chain = ReceiptChain(data_dir / "receipts.jsonl", priv, pub)
-    r1 = chain.append("Read", {"path": "a"}, None, "idle", "gate_allow")
-    r2 = chain.append("Write", {"path": "b"}, {"ok": True}, "developing", "gate_allow")
+    r1 = chain.append("read", {"path": "a"}, None, "idle", "gate_allow")
+    r2 = chain.append("write", {"path": "b"}, {"ok": True}, "developing", "gate_allow")
     assert r2.seq == 1
     assert r2.prev_hash != r1.prev_hash  # prev_hash of r2 = hash of r1's canonical form
 
@@ -27,9 +27,9 @@ def test_chain_links_receipts(key_pair, data_dir):
 def test_verify_valid_chain(key_pair, data_dir):
     priv, pub, _ = key_pair
     chain = ReceiptChain(data_dir / "receipts.jsonl", priv, pub)
-    chain.append("Read", {"a": 1}, None, "idle", "gate_allow")
-    chain.append("Write", {"b": 2}, {"ok": True}, "idle", "post_receipt")
-    chain.append("Bash", {"cmd": "ls"}, {"out": "file"}, "developing", "gate_allow")
+    chain.append("read", {"a": 1}, None, "idle", "gate_allow")
+    chain.append("write", {"b": 2}, {"ok": True}, "idle", "post_receipt")
+    chain.append("bash", {"cmd": "ls"}, {"out": "file"}, "developing", "gate_allow")
 
     valid, last_seq, msg = chain.verify_chain()
     assert valid
@@ -41,8 +41,8 @@ def test_verify_detects_tampered_field(key_pair, data_dir):
     priv, pub, _ = key_pair
     chain_path = data_dir / "receipts.jsonl"
     chain = ReceiptChain(chain_path, priv, pub)
-    chain.append("Read", {"a": 1}, None, "idle", "gate_allow")
-    chain.append("Write", {"b": 2}, None, "idle", "gate_allow")
+    chain.append("read", {"a": 1}, None, "idle", "gate_allow")
+    chain.append("write", {"b": 2}, None, "idle", "gate_allow")
 
     # Tamper with the first receipt's tool_name
     lines = chain_path.read_text().splitlines()
@@ -61,9 +61,9 @@ def test_verify_detects_deleted_entry(key_pair, data_dir):
     priv, pub, _ = key_pair
     chain_path = data_dir / "receipts.jsonl"
     chain = ReceiptChain(chain_path, priv, pub)
-    chain.append("Read", {"a": 1}, None, "idle", "gate_allow")
-    chain.append("Write", {"b": 2}, None, "idle", "gate_allow")
-    chain.append("Bash", {"c": 3}, None, "idle", "gate_allow")
+    chain.append("read", {"a": 1}, None, "idle", "gate_allow")
+    chain.append("write", {"b": 2}, None, "idle", "gate_allow")
+    chain.append("bash", {"c": 3}, None, "idle", "gate_allow")
 
     # Delete the middle entry
     lines = chain_path.read_text().splitlines()
@@ -88,13 +88,13 @@ def test_chain_reloads_from_disk(key_pair, data_dir):
     chain_path = data_dir / "receipts.jsonl"
 
     chain1 = ReceiptChain(chain_path, priv, pub)
-    chain1.append("Read", {"a": 1}, None, "idle", "gate_allow")
-    chain1.append("Write", {"b": 2}, None, "idle", "gate_allow")
+    chain1.append("read", {"a": 1}, None, "idle", "gate_allow")
+    chain1.append("write", {"b": 2}, None, "idle", "gate_allow")
 
     # Create new chain instance from same file
     chain2 = ReceiptChain(chain_path, priv, pub)
     assert chain2.length == 2
-    r3 = chain2.append("Bash", {"c": 3}, None, "idle", "gate_allow")
+    r3 = chain2.append("bash", {"c": 3}, None, "idle", "gate_allow")
     assert r3.seq == 2
 
     # Verify the whole chain still works
@@ -106,31 +106,31 @@ def test_chain_reloads_from_disk(key_pair, data_dir):
 def test_query_by_tool_name(key_pair, data_dir):
     priv, pub, _ = key_pair
     chain = ReceiptChain(data_dir / "receipts.jsonl", priv, pub)
-    chain.append("Read", {"a": 1}, None, "idle", "gate_allow")
-    chain.append("Write", {"b": 2}, None, "idle", "gate_allow")
-    chain.append("Read", {"c": 3}, None, "idle", "gate_allow")
+    chain.append("read", {"a": 1}, None, "idle", "gate_allow")
+    chain.append("write", {"b": 2}, None, "idle", "gate_allow")
+    chain.append("read", {"c": 3}, None, "idle", "gate_allow")
 
-    results = chain.get_receipts(tool_name="Read")
+    results = chain.get_receipts(tool_name="read")
     assert len(results) == 2
-    assert all(r.tool_name == "Read" for r in results)
+    assert all(r.tool_name == "read" for r in results)
 
 
 def test_query_by_state(key_pair, data_dir):
     priv, pub, _ = key_pair
     chain = ReceiptChain(data_dir / "receipts.jsonl", priv, pub)
-    chain.append("Read", {"a": 1}, None, "idle", "gate_allow")
-    chain.append("Write", {"b": 2}, None, "developing", "gate_allow")
+    chain.append("read", {"a": 1}, None, "idle", "gate_allow")
+    chain.append("write", {"b": 2}, None, "developing", "gate_allow")
 
     results = chain.get_receipts(state="developing")
     assert len(results) == 1
-    assert results[0].tool_name == "Write"
+    assert results[0].tool_name == "write"
 
 
 def test_query_with_limit(key_pair, data_dir):
     priv, pub, _ = key_pair
     chain = ReceiptChain(data_dir / "receipts.jsonl", priv, pub)
     for i in range(10):
-        chain.append("Read", {"i": i}, None, "idle", "gate_allow")
+        chain.append("read", {"i": i}, None, "idle", "gate_allow")
 
     results = chain.get_receipts(limit=3)
     assert len(results) == 3
@@ -140,7 +140,7 @@ def test_query_with_limit(key_pair, data_dir):
 
 def test_receipt_canonical_bytes_excludes_signature():
     receipt = Receipt(
-        id="test-id", seq=0, timestamp=1000.0, tool_name="Read",
+        id="test-id", seq=0, timestamp=1000.0, tool_name="read",
         tool_input_hash="abc", tool_output_hash=None, state="idle",
         prev_hash="def", event="gate_allow", signature="should-be-excluded",
     )
@@ -151,7 +151,7 @@ def test_receipt_canonical_bytes_excludes_signature():
 
 def test_receipt_canonical_bytes_deterministic():
     receipt = Receipt(
-        id="test-id", seq=0, timestamp=1000.0, tool_name="Read",
+        id="test-id", seq=0, timestamp=1000.0, tool_name="read",
         tool_input_hash="abc", tool_output_hash=None, state="idle",
         prev_hash="def", event="gate_allow", signature="sig",
     )
@@ -161,5 +161,5 @@ def test_receipt_canonical_bytes_deterministic():
 def test_output_hash_none_for_gate_events(key_pair, data_dir):
     priv, pub, _ = key_pair
     chain = ReceiptChain(data_dir / "receipts.jsonl", priv, pub)
-    receipt = chain.append("Read", {"path": "/test"}, None, "idle", "gate_allow")
+    receipt = chain.append("read", {"path": "/test"}, None, "idle", "gate_allow")
     assert receipt.tool_output_hash is None

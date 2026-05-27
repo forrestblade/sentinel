@@ -13,7 +13,7 @@ fsm:
 
     planning:
       description: "Read-only exploration"
-      allowed_tools: ["Read", "Glob", "Grep", "WebFetch", "WebSearch", "Agent", "mcp__.*"]
+      allowed_tools: ["read", "bash", "multi_tool_use\\.parallel"]
 
     developing:
       description: "Full tool access"
@@ -21,11 +21,11 @@ fsm:
 
     testing:
       description: "Test execution only"
-      allowed_tools: ["Read", "Glob", "Grep", "Bash", "mcp__.*"]
+      allowed_tools: ["read", "bash", "multi_tool_use\\.parallel"]
 
     reviewing:
       description: "Read-only review"
-      allowed_tools: ["Read", "Glob", "Grep", "WebFetch", "mcp__.*"]
+      allowed_tools: ["read", "bash", "multi_tool_use\\.parallel"]
 
   transitions:
     - { from: idle, to: planning, trigger: manual }
@@ -33,7 +33,7 @@ fsm:
     - { from: planning, to: developing, trigger: manual }
     - from: developing
       to: testing
-      trigger: Bash
+      trigger: bash
       guards:
         - field: command
           pattern: "^(pnpm|npm)\\s+test"
